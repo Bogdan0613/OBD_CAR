@@ -31,6 +31,11 @@ carbrain/
 
 ## Install & Run
 
+This is a pure‑Python/Tkinter app that runs out of the box on a
+**Raspberry Pi 5** with a 3.5" (480×320) touchscreen. Just make sure
+Python 3 and Tkinter are installed; no other dependencies are needed unless
+you enable the real OBD interface.
+
 ```bash
 # Tkinter (usually pre-installed on Pi OS)
 sudo apt-get install python3-tk
