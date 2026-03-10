@@ -45,7 +45,7 @@ class CarBrain(tk.Tk):
         self.title("CarBrain")
         self.geometry(f"{W}x{H}+0+0")
         self.resizable(False, False)
-        # self.overrideredirect(True)   # ← uncomment for kiosk / Pi
+        self.overrideredirect(True)   # ← uncomment for kiosk / Pi
 
         # ── Core services ─────────────────────────────────────────────────
         self.db = DB()
