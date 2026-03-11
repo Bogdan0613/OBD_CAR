@@ -15,7 +15,6 @@ sleep 3
 echo "Step 1: Updating system packages..."
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-pip python3-dev python3-tk python3-serial bluetooth bluez-tools python3-full
-pip3 install --upgrade pip
 
 # 2. Create virtual environment and install Python dependencies
 echo "Step 2: Creating virtual environment and installing Python libraries..."
