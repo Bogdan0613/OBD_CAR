@@ -21,14 +21,18 @@ class ConnectionScreen:
         self._scanning = False
         self._connection_status = None  # "connecting", "connected", "failed"
         self._auto_connect_attempted = False
+        self._device_scroll = 0  # Scroll offset for device list
 
         # Button regions for click detection
         self._scan_btn_rect = None
         self._bypass_btn_rect = None
+        self._back_btn_rect = None
         self._device_rects = {}  # device_idx -> (x1, y1, x2, y2)
 
         # Bind canvas click events
         self.cv.bind("<Button-1>", self._on_canvas_click)
+        self.cv.bind("<Button-4>", self._on_scroll_up)  # Mouse wheel up
+        self.cv.bind("<Button-5>", self._on_scroll_down)  # Mouse wheel down
 
     def update_theme(self, T, F):
         self.T = T
@@ -50,14 +54,16 @@ class ConnectionScreen:
             return
         self._scanning = True
         self._devices = []
+        self._device_scroll = 0
+        self.draw()  # Show scanning state immediately
 
         def scan():
             try:
                 # Use OBDReal's static method for device discovery
                 from modules.obd_interface import OBDReal
                 discovered = OBDReal.discover_devices()
-                # Update devices list (thread-safe because Python GIL)
-                self._devices = discovered
+                # Prepend new devices (newest at top)
+                self._devices = discovered + self._devices
             except Exception as ex:
                 print(f"[WARN] Bluetooth scan failed: {ex}")
             finally:
@@ -87,9 +93,10 @@ class ConnectionScreen:
         # Check scan button
         if self._scan_btn_rect:
             x1, y1, x2, y2 = self._scan_btn_rect
-            if x1 <= x <= x2 and y1 <= y <= y2 and not self._scanning:
-                self._scan_devices()
-                return
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                if not self._scanning:
+                    self._scan_devices()
+                    return
 
         # Check device buttons
         for device_idx, (x1, y1, x2, y2) in self._device_rects.items():
@@ -98,12 +105,35 @@ class ConnectionScreen:
                 self._connect_device(mac, name)
                 return
 
+        # Check back button
+        if self._back_btn_rect:
+            x1, y1, x2, y2 = self._back_btn_rect
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                self._connection_status = None
+                self._devices = []
+                self._device_scroll = 0
+                self._scanning = False
+                self.draw()
+                return
+
         # Check bypass button
         if self._bypass_btn_rect:
             x1, y1, x2, y2 = self._bypass_btn_rect
             if x1 <= x <= x2 and y1 <= y <= y2:
                 self._on_bypass()
                 return
+
+    def _on_scroll_up(self, event):
+        """Scroll device list up."""
+        if self._device_scroll > 0:
+            self._device_scroll -= 1
+            self.draw()
+
+    def _on_scroll_down(self, event):
+        """Scroll device list down."""
+        if self._device_scroll < len(self._devices) - 5:
+            self._device_scroll += 1
+            self.draw()
 
     def draw(self):
         cv = self.cv
@@ -114,6 +144,7 @@ class ConnectionScreen:
         # Reset button regions
         self._scan_btn_rect = None
         self._bypass_btn_rect = None
+        self._back_btn_rect = None
         self._device_rects = {}
 
         # Header
@@ -147,35 +178,74 @@ class ConnectionScreen:
         scan_color = T["acc2_dim"] if self._scanning else T["acc_dim"]
         cv.create_rectangle(8, y, W - 8, y + 35,
                            fill=scan_color, outline=T["acc"], width=2)
-        scan_text = "SCANNING" if self._scanning else "SCAN"
+        scan_text = "SCANNING..." if self._scanning else "SCAN"
         cv.create_text(W // 2, y + 17, text=scan_text,
                        font=self.F["hud_md"], fill=T["acc"], anchor="center")
         self._scan_btn_rect = (8, y, W - 8, y + 35)
 
-        # Device list
+        # Device list area
         y += 40
-        device_idx = 0
-        for mac, name in self._devices[:5]:  # Max 5 devices
+        list_start = y
+        list_end = cH - 38  # Space for buttons at bottom
+
+        # Draw device list with scroll offset (show 5 visible items max)
+        visible_count = 0
+        for i in range(self._device_scroll, len(self._devices)):
+            if visible_count >= 5 or y > list_end:
+                break
+
+            mac, name = self._devices[i]
             cv.create_rectangle(8, y, W - 8, y + 32,
                                fill=T["bg3"], outline=T["acc2"], width=1)
             cv.create_text(12, y + 7, text=name, font=self.F["hud_sm"], fill=T["text"],
                            anchor="nw")
             cv.create_text(12, y + 20, text=mac, font=self.F["ui_xs"], fill=T["text2"],
                            anchor="nw")
-            self._device_rects[device_idx] = (8, y, W - 8, y + 32)
+            self._device_rects[i] = (8, y, W - 8, y + 32)  # Store actual device index
             y += 33
-            device_idx += 1
+            visible_count += 1
 
-        # Show how many more if needed
-        if len(self._devices) > 5:
-            cv.create_text(W // 2, y, text=f"+{len(self._devices) - 5} more",
-                           font=self.F["ui_xs"], fill=T["text2"], anchor="center")
-            y += 20
+        # Scroll indicators
+        if self._device_scroll > 0:
+            cv.create_text(W - 12, list_start + 5, text="↑",
+                           font=self.F["hud_sm"], fill=T["acc2"], anchor="ne")
+        if self._device_scroll + 5 < len(self._devices):
+            cv.create_text(W - 12, list_end - 5, text="↓",
+                           font=self.F["hud_sm"], fill=T["acc2"], anchor="se")
 
-        # Bypass button at bottom
-        bypass_y = cH - 32
-        cv.create_rectangle(8, bypass_y, W - 8, cH - 2,
-                           fill=T["danger_dim"], outline=T["danger"], width=2)
-        cv.create_text(W // 2, bypass_y + 15, text="BYPASS",
-                       font=self.F["hud_md"], fill=T["danger"], anchor="center")
-        self._bypass_btn_rect = (8, bypass_y, W - 8, cH - 2)
+        # Show hint if list is empty and not scanning
+        if not self._devices and not self._scanning:
+            hint_y = (list_start + list_end) // 2
+            cv.create_text(W // 2, hint_y,
+                           text="Tap SCAN to search",
+                           font=self.F["ui_md"], fill=T["text2"], anchor="center")
+
+        # Show scanning text if scanning and no devices yet
+        if self._scanning and not self._devices:
+            hint_y = (list_start + list_end) // 2
+            cv.create_text(W // 2, hint_y,
+                           text="Scanning...",
+                           font=self.F["ui_md"], fill=T["acc2"], anchor="center")
+
+        # Show device count if scanning
+        if self._scanning and self._devices:
+            cv.create_text(W - 12, list_start + 5, text=f"{len(self._devices)} found",
+                           font=self.F["ui_xs"], fill=T["acc2"], anchor="ne")
+
+        # Bottom buttons: BACK (left) and BYPASS (right)
+        btn_y = cH - 32
+        mid = W // 2
+
+        # BACK button (left)
+        cv.create_rectangle(8, btn_y, mid - 4, cH - 2,
+                           fill=T["bg2"], outline=T["text2"], width=1)
+        cv.create_text(mid // 2, btn_y + 15, text="BACK",
+                       font=self.F["hud_sm"], fill=T["text"], anchor="center")
+        self._back_btn_rect = (8, btn_y, mid - 4, cH - 2)
+
+        # BYPASS button (right)
+        cv.create_rectangle(mid + 4, btn_y, W - 8, cH - 2,
+                           fill=T["danger_dim"], outline=T["danger"], width=1)
+        cv.create_text(mid + (W - mid) // 2, btn_y + 15, text="BYPASS",
+                       font=self.F["hud_sm"], fill=T["danger"], anchor="center")
+        self._bypass_btn_rect = (mid + 4, btn_y, W - 8, cH - 2)

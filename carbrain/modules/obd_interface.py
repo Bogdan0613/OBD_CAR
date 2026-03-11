@@ -3,6 +3,8 @@ import math
 import random
 import threading
 import subprocess
+import platform
+import os
 
 from modules.config import POLL_MS
 
@@ -341,20 +343,85 @@ class OBDReal:
 
     @staticmethod
     def discover_devices():
-        """Scan for Bluetooth devices using hcitool."""
+        """Scan for Bluetooth devices (cross-platform: macOS and Linux)."""
+        devices = []
+        system = platform.system()
+
+        try:
+            if system == "Darwin":  # macOS
+                devices.extend(OBDReal._scan_macos())
+            elif system == "Linux":  # Linux/Raspberry Pi
+                devices.extend(OBDReal._scan_linux())
+            else:
+                print(f"[WARN] Bluetooth scan not supported on {system}")
+        except Exception as e:
+            print(f"[WARN] Bluetooth scan failed: {e}")
+
+        return devices
+
+    @staticmethod
+    def _scan_linux():
+        """Scan using hcitool (Linux/Raspberry Pi)."""
         devices = []
         try:
             result = subprocess.run(["hcitool", "scan"], capture_output=True, text=True, timeout=10)
-            lines = result.stdout.strip().split('\n')[1:]  # Skip header
-            for line in lines:
-                parts = line.strip().split('\t')
-                if len(parts) >= 2:
-                    mac = parts[0].strip()
-                    name = parts[1].strip() if len(parts) > 1 else "Unknown"
-                    if mac and name:
-                        devices.append((mac, name))
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')[1:]  # Skip header
+                for line in lines:
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 2:
+                        mac = parts[0].strip()
+                        name = parts[1].strip() if len(parts) > 1 else "Unknown"
+                        if mac and name:
+                            devices.append((mac, name))
+        except FileNotFoundError:
+            print("[WARN] hcitool not found. Run: sudo apt-get install bluez")
+        except subprocess.TimeoutExpired:
+            print("[WARN] hcitool scan timeout")
         except Exception as e:
-            print(f"[WARN] Bluetooth scan failed: {e}")
+            print(f"[WARN] Linux scan error: {e}")
+        return devices
+
+    @staticmethod
+    def _scan_macos():
+        """Scan using macOS system_profiler."""
+        devices = []
+        try:
+            result = subprocess.run(
+                ["system_profiler", "SPBluetoothDataType"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                current_device = None
+
+                for line in lines:
+                    stripped = line.strip()
+
+                    # Device names end with ':' and have moderate indentation
+                    if stripped.endswith(':') and 'Address' not in stripped and 'Bluetooth' not in stripped:
+                        indent = len(line) - len(line.lstrip())
+                        if 8 <= indent <= 16:
+                            current_device = stripped.rstrip(':')
+
+                    # Address line - starts with "Address:" after stripping
+                    if stripped.startswith('Address:'):
+                        try:
+                            mac = line.split('Address:')[1].strip()
+                            parts = mac.split(':')
+                            if len(parts) == 6:
+                                devices.append((mac, current_device or "Bluetooth Device"))
+                                current_device = None
+                        except Exception:
+                            pass
+
+        except FileNotFoundError:
+            print("[WARN] system_profiler not found")
+        except subprocess.TimeoutExpired:
+            print("[WARN] system_profiler timeout")
+        except Exception as e:
+            print(f"[WARN] macOS scan error: {e}")
+
         return devices
 
     def reset(self):
