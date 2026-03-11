@@ -9,14 +9,10 @@ Run:
 
 For real OBD (ELM327 Bluetooth):
     pip install obd
-    Then set USE_REAL_OBD = True below and set OBD_PORT to your serial device.
+    Then connect through the UI connection screen.
 """
 
 import tkinter as tk
-
-# ── Select OBD source here ─────────────────────────────────────────────────
-USE_REAL_OBD = True
-OBD_PORT     = "/dev/rfcomm0"          # Bluetooth serial port for ELM327
 
 # ── Imports ────────────────────────────────────────────────────────────────
 from modules.config  import W, H, NAV_H, TOP_H, THEMES, POLL_MS
@@ -30,6 +26,7 @@ from modules.screen_history import HistoryScreen
 from modules.screen_weekly  import WeeklyScreen
 from modules.screen_monthly import MonthlyScreen
 from modules.screen_errors  import ErrorsScreen
+from modules.screen_connection import ConnectionScreen
 
 from modules.modals import NewTripModal, ConfirmModal, PriceAdjustModal
 
@@ -50,32 +47,97 @@ class CarBrain(tk.Tk):
         # ── Core services ─────────────────────────────────────────────────
         self.db = DB()
 
-        if USE_REAL_OBD:
-            from modules.obd_interface import OBDReal
-            self.obd = OBDReal(port=OBD_PORT)
-        else:
-            from modules.obd_interface import OBDSim
-            self.obd = OBDSim()
-
         # ── Theme ─────────────────────────────────────────────────────────
         self.theme_name = self.db.get("theme", "night")
         self.T  = THEMES[self.theme_name]
         self.F  = make_fonts()
         self.configure(bg=self.T["bg"])
 
-        # ── Trip controller ───────────────────────────────────────────────
-        self.trip = TripController(self.db, self.obd)
-        self.trip.fuel_price = float(self.db.get("fuel_price", 1.80))
+        # ── OBD will be initialized after connection ─────────────────────
+        self.obd = None
+
+        # ── Trip controller will be initialized after connection ─────────
+        self.trip = None
 
         # ── Active modal ref ──────────────────────────────────────────────
         self._modal = None
         self._history_cleared = False
-        self._cur   = "home"
+        self._cur   = "connection"
+        self._main_ui_built = False
 
-        # ── Build UI ──────────────────────────────────────────────────────
+        # ── Connection screen ─────────────────────────────────────────────
+        self._conn_canvas = tk.Canvas(self, bg=self.T["bg"], highlightthickness=0)
+        self._conn_canvas.place(x=0, y=0, width=W, height=H)
+
+        self._conn_screen = ConnectionScreen(
+            self._conn_canvas, self.T, self.F,
+            on_connect=self._on_connect_selected,
+            on_bypass=self._on_bypass_selected,
+        )
+        self._conn_screen.draw()
+
+        # Schedule auto-connect attempt
+        self.after(500, self._conn_screen.start_auto_connect)
+
+        self._tick()
+
+    def _on_connect_selected(self, mac: str = None):
+        """User selected to connect to a device or auto-connect."""
+        if mac is None:
+            # Try to auto-connect to last device
+            last_mac = self.db.get("last_obd_device")
+            if last_mac:
+                mac = last_mac
+            else:
+                # No last device, show message and return
+                print("[INFO] No previously connected device found. User must select device.")
+                self._conn_screen.set_connection_status("failed")
+                return
+
+        print(f"[INFO] Attempting to connect to OBD device: {mac}")
+
+        from modules.obd_interface import OBDReal
+        self.obd = OBDReal()
+
+        # Try to connect
+        if self.obd.connect(port="/dev/rfcomm0"):
+            # Connection successful
+            self.db.put("last_obd_device", mac)
+            print("[INFO] OBD connection established")
+            self._conn_screen.set_connection_status("connected")
+            # Small delay to show connected state before transitioning
+            self.after(800, self._initialize_main_app)
+        else:
+            print("[WARN] OBD connection failed")
+            self.obd = None
+            self._conn_screen.set_connection_status("failed")
+
+    def _on_bypass_selected(self):
+        """User selected bypass mode (testing without OBD)."""
+        print("[INFO] Using bypass mode (testing without recordings)")
+        from modules.obd_interface import OBDBypass
+        self.obd = OBDBypass()
+        self._conn_screen.set_connection_status("connected")
+        # Small delay to show connected state before transitioning
+        self.after(800, self._initialize_main_app)
+
+    def _initialize_main_app(self):
+        """Initialize the main app after OBD connection is established."""
+        if self._main_ui_built:
+            return
+
+        # Initialize trip controller
+        self.trip = TripController(self.db, self.obd)
+        self.trip.fuel_price = float(self.db.get("fuel_price", 1.80))
+
+        # Hide connection canvas
+        self._conn_canvas.place_forget()
+
+        # Build main UI
         self._build()
         self._show("home")
-        self._tick()
+        self._main_ui_built = True
+        self._cur = "home"
 
     # ── Build all persistent UI elements ──────────────────────────────────
     def _build(self):
@@ -144,7 +206,11 @@ class CarBrain(tk.Tk):
 
     def _redraw_screen(self, name: str):
         if name == "home":
-            self._home.draw(self.obd.data, self.trip.fuel_price)
+            if self.obd:
+                self._home.draw(self.obd.data, self.trip.fuel_price)
+            else:
+                # Fallback if OBD not initialized
+                self._home.draw({}, self.trip.fuel_price)
         elif name == "history":
             trips = [] if self._history_cleared else self.db.trips(limit=8, show_hidden=False)
             rows  = []
@@ -167,7 +233,9 @@ class CarBrain(tk.Tk):
                 self.db.get_month_archive(),
             )
         elif name == "errors":
-            if USE_REAL_OBD:
+            # Only try to read real OBD codes if it's a real OBD connection
+            from modules.obd_interface import OBDReal
+            if isinstance(self.obd, OBDReal) and self.obd.is_connected:
                 try:
                     codes = [
                         (c, d, "error") for c, d in self.obd.get_fault_codes()
@@ -303,7 +371,8 @@ class CarBrain(tk.Tk):
         self._redraw_screen("history")
 
     def _clear_fault_codes(self):
-        if USE_REAL_OBD:
+        from modules.obd_interface import OBDReal
+        if isinstance(self.obd, OBDReal) and self.obd.is_connected:
             try:
                 self.obd.clear_fault_codes()
                 self._errors.set_codes([], simulated=False)
@@ -319,6 +388,11 @@ class CarBrain(tk.Tk):
 
     # ── Main tick ──────────────────────────────────────────────────────────
     def _tick(self):
+        if not self._main_ui_built:
+            # Still on connection screen
+            self.after(POLL_MS, self._tick)
+            return
+
         # Clock in topbar
         self._topbar.tick()
 
@@ -326,19 +400,20 @@ class CarBrain(tk.Tk):
         self.trip.tick()
 
         # Live-update current screen
-        if self._modal is None:
-            if self._cur == "home":
+        if self._modal is None and self._main_ui_built:
+            if self._cur == "home" and self.obd and self.trip:
                 self._home.draw(self.obd.data, self.trip.fuel_price)
 
         self.after(POLL_MS, self._tick)
 
     def on_close(self):
-        if self.trip.active:
+        if self.trip and self.trip.active:
             self.trip.end()
-        try:
-            self.obd.stop()
-        except Exception:
-            pass
+        if self.obd:
+            try:
+                self.obd.stop()
+            except Exception:
+                pass
         self.destroy()
 
 

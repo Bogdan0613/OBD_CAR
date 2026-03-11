@@ -2,6 +2,7 @@ import time
 import math
 import random
 import threading
+import subprocess
 
 from modules.config import POLL_MS
 
@@ -115,6 +116,47 @@ class OBDSim:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# BYPASS MODE  (Testing without real OBD)
+# ══════════════════════════════════════════════════════════════════════════════
+class OBDBypass:
+    """Testing mode that returns all zeros (no recordings)."""
+
+    def __init__(self):
+        self.is_connected = True
+
+    @property
+    def data(self):
+        """Return all zeros for bypass mode."""
+        return {
+            "rpm": 0,
+            "cool": 0,
+            "state": "COLD",
+            "inst": 0,
+            "avg": 0,
+            "load": 0,
+            "throttle": 0,
+            "speed": 0,
+            "map": 0,
+            "intake": 0,
+            "voltage": 0,
+            "km": 0,
+            "fuel": 0,
+        }
+
+    def reset(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def get_fault_codes(self):
+        return []
+
+    def clear_fault_codes(self):
+        pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # REAL OBD  (ELM327 / python-obd)
 # ══════════════════════════════════════════════════════════════════════════════
 class OBDReal:
@@ -126,25 +168,40 @@ class OBDReal:
     kilometers are calculated from speed over time.
 
     Usage:
-        obd = OBDReal(port="/dev/rfcomm0")  # Bluetooth serial port
+        obd = OBDReal()  # Deferred connection
+        obd.connect(port="/dev/rfcomm0")  # OR auto-discover
     """
 
-    def __init__(self, port="/dev/rfcomm0"):
-        try:
-            import obd
-            # Configure OBD connection with Mazda-specific settings
-            self._obd = obd.OBD(port, baudrate=38400, timeout=30)
-            print(f"OBD connection status: {self._obd.status()}")
-        except ImportError:
-            raise RuntimeError("python-obd not installed. Run: pip install obd")
-
+    def __init__(self):
+        self._obd = None
         self._km = 0.0
         self._fuel = 0.0
         self._last = time.time()
         self._lock = threading.Lock()
         self._cache = {}
-        self._running = True
-        threading.Thread(target=self._poll, daemon=True).start()
+        self._running = False
+        self._poll_thread = None
+        self.is_connected = False
+
+    def connect(self, port="/dev/rfcomm0"):
+        """Attempt to connect to OBD device."""
+        try:
+            import obd
+            self._obd = obd.OBD(port, baudrate=38400, timeout=30)
+            print(f"OBD connection status: {self._obd.status()}")
+            self.is_connected = True
+            if not self._running:
+                self._running = True
+                self._poll_thread = threading.Thread(target=self._poll, daemon=True)
+                self._poll_thread.start()
+            return True
+        except ImportError:
+            raise RuntimeError("python-obd not installed. Run: pip install obd")
+        except Exception as e:
+            print(f"Failed to connect to OBD: {e}")
+            self.is_connected = False
+            return False
+
 
     def _q(self, cmd_name):
         """Query OBD command with error handling."""
@@ -196,28 +253,44 @@ class OBDReal:
                         pass
 
             if maf:
-                maf_gs = maf.magnitude
-                if speed and speed.magnitude > 1:
-                    fc_lh = (maf_gs * 3600) / (14.7 * 755)
-                    spd_kmh = speed.magnitude
-                    inst = (fc_lh / spd_kmh) * 100
-                else:
-                    inst = (maf_gs * 3.6) / (14.7 * 0.755)
+                try:
+                    maf_gs = maf.magnitude
+                    if speed and hasattr(speed, "magnitude") and speed.magnitude > 1:
+                        fc_lh = (maf_gs * 3600) / (14.7 * 755)
+                        spd_kmh = speed.magnitude
+                        inst = (fc_lh / spd_kmh) * 100
+                    else:
+                        inst = (maf_gs * 3.6) / (14.7 * 0.755)
+                except (AttributeError, TypeError):
+                    inst = 0.0
             else:
                 if rpm and load:
-                    base_rate = (rpm.magnitude / 1000.0) * 0.5 * (load.magnitude / 100.0)
-                    if speed and speed.magnitude > 1:
-                        inst = (base_rate / speed.magnitude) * 100
-                    else:
-                        inst = base_rate
+                    try:
+                        base_rate = (rpm.magnitude / 1000.0) * 0.5 * (load.magnitude / 100.0)
+                        if speed and hasattr(speed, "magnitude") and speed.magnitude > 1:
+                            inst = (base_rate / speed.magnitude) * 100
+                        else:
+                            inst = base_rate
+                    except (AttributeError, TypeError):
+                        inst = 0.0
 
             # if we got an obd average use it (override our computed value)
             if obd_avg is not None:
                 inst = obd_avg
 
-            spd_val = speed.magnitude if speed else 0
-            if hasattr(speed, "units") and str(speed.units) == "meter_per_second":
-                spd_val *= 3.6
+            spd_val = 0
+            if speed and hasattr(speed, "magnitude"):
+                try:
+                    spd_val = speed.magnitude
+                    if hasattr(speed, "units"):
+                        try:
+                            units_str = str(speed.units).lower()
+                            if "meter" in units_str and "second" in units_str:
+                                spd_val *= 3.6
+                        except Exception:
+                            pass
+                except (AttributeError, TypeError):
+                    spd_val = 0
 
             dk = spd_val * dt_h
             df = dk * inst / 100.0
@@ -242,6 +315,13 @@ class OBDReal:
 
     @property
     def data(self):
+        if not self.is_connected or self._obd is None:
+            return {
+                "rpm": 0, "cool": 0, "load": 0, "throttle": 0,
+                "speed": 0, "inst": 0, "avg": 0, "state": "COLD",
+                "map": 0, "intake": 0, "voltage": 0,
+                "km": 0, "fuel": 0,
+            }
         with self._lock:
             km = self._km
             fuel = self._fuel
@@ -259,6 +339,24 @@ class OBDReal:
                 "fuel": round(fuel, 3),
             }
 
+    @staticmethod
+    def discover_devices():
+        """Scan for Bluetooth devices using hcitool."""
+        devices = []
+        try:
+            result = subprocess.run(["hcitool", "scan"], capture_output=True, text=True, timeout=10)
+            lines = result.stdout.strip().split('\n')[1:]  # Skip header
+            for line in lines:
+                parts = line.strip().split('\t')
+                if len(parts) >= 2:
+                    mac = parts[0].strip()
+                    name = parts[1].strip() if len(parts) > 1 else "Unknown"
+                    if mac and name:
+                        devices.append((mac, name))
+        except Exception as e:
+            print(f"[WARN] Bluetooth scan failed: {e}")
+        return devices
+
     def reset(self):
         with self._lock:
             self._km = 0.0
@@ -269,6 +367,8 @@ class OBDReal:
 
     def get_fault_codes(self):
         """Return list of (code, description) tuples."""
+        if not self.is_connected or self._obd is None:
+            return []
         import obd
         try:
             r = self._obd.query(obd.commands.GET_DTC)
@@ -281,6 +381,8 @@ class OBDReal:
 
     def clear_fault_codes(self):
         """Clear diagnostic trouble codes."""
+        if not self.is_connected or self._obd is None:
+            return
         import obd
         try:
             self._obd.query(obd.commands.CLEAR_DTC)

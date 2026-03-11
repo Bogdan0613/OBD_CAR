@@ -125,7 +125,7 @@ class HomeScreen:
         )
 
         # Row 2: ENG LOAD | THROTTLE
-        engload = d.get("engload", 0)
+        engload = d.get("load", 0)
         throttle = d.get("throttle", 0)
         kpi(
             RX1, K2Y1, MID - 1, K2Y2,

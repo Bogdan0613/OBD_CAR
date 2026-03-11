@@ -131,15 +131,21 @@ class DB:
     def trips(self, limit=20, since_date=None, show_hidden=False):
         with self._lock:
             if since_date:
-                c = self.cx.execute(
-                    "SELECT * FROM trips WHERE date>=? AND (hidden=0 OR ?)" + (" ORDER BY id DESC LIMIT ?" if limit else ""),
-                    (since_date, show_hidden, limit) if limit else (since_date, show_hidden),
-                )
+                if show_hidden:
+                    query = "SELECT * FROM trips WHERE date>=?" + (" ORDER BY id DESC LIMIT ?" if limit else "")
+                    params = (since_date, limit) if limit else (since_date,)
+                else:
+                    query = "SELECT * FROM trips WHERE date>=? AND hidden=0" + (" ORDER BY id DESC LIMIT ?" if limit else "")
+                    params = (since_date, limit) if limit else (since_date,)
+                c = self.cx.execute(query, params)
             else:
-                c = self.cx.execute(
-                    "SELECT * FROM trips WHERE hidden=0 OR ?" + (" ORDER BY id DESC LIMIT ?" if limit else ""),
-                    (show_hidden, limit) if limit else (show_hidden,),
-                )
+                if show_hidden:
+                    query = "SELECT * FROM trips" + (" ORDER BY id DESC LIMIT ?" if limit else "")
+                    params = (limit,) if limit else ()
+                else:
+                    query = "SELECT * FROM trips WHERE hidden=0" + (" ORDER BY id DESC LIMIT ?" if limit else "")
+                    params = (limit,) if limit else ()
+                c = self.cx.execute(query, params)
             rows = c.fetchall()
             return [self._row_to_dict(c, r) for r in rows]
 
