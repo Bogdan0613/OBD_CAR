@@ -135,16 +135,27 @@ class CarBrain(tk.Tk):
 
             # Try to connect
             if self.obd.connect(port=port):
-                # Connection successful
-                self.db.put("last_obd_device", mac)
-                print("[INFO] OBD connection established")
-                self._conn_screen.set_connection_status("connected")
-                # Small delay to show connected state before transitioning
-                self.after(800, self._initialize_main_app)
+                # Validate it's a real OBD by doing a test query
+                import time
+                time.sleep(0.5)  # Give it a moment to initialize
+                test_data = self.obd.data
+                # Check if we got valid OBD data (not all zeros)
+                if test_data.get("rpm") is None or (test_data.get("rpm") == 0 and test_data.get("speed") == 0 and test_data.get("cool") == 0):
+                    print("[WARN] OBD device not responding to queries - not a real OBD")
+                    self.obd.stop()
+                    self.obd = None
+                    self._conn_screen.show_not_obd_message()
+                else:
+                    # Connection successful
+                    self.db.put("last_obd_device", mac)
+                    print("[INFO] OBD connection established")
+                    self._conn_screen.set_connection_status("connected")
+                    # Small delay to show connected state before transitioning
+                    self.after(800, self._initialize_main_app)
             else:
                 print("[WARN] OBD connection failed")
                 self.obd = None
-                self._conn_screen.set_connection_status("failed")
+                self._conn_screen.reset_to_device_list()
         except Exception as e:
             print(f"[ERROR] _on_connect_selected failed: {e}")
             import traceback

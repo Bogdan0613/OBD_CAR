@@ -92,6 +92,18 @@ class ConnectionScreen:
         self._connecting = False
         self.draw()
 
+    def reset_to_device_list(self):
+        """Reset connection state but keep device list (go back to device selection)."""
+        self._connection_status = None
+        self._connecting = False
+        self.draw()
+
+    def show_not_obd_message(self):
+        """Show 'Not an OBD' message for 2 seconds, then return to device list."""
+        self._connection_status = "not_obd"
+        self.draw()
+        self.cv.after(2000, self.reset_to_device_list)
+
     def _on_canvas_click(self, event):
         """Handle canvas clicks by checking coordinates."""
         x, y = event.x, event.y
@@ -183,6 +195,12 @@ class ConnectionScreen:
         if self._connection_status == "connecting":
             cv.create_text(W // 2, cH // 2,
                            text="⏳ Connecting...", font=self.F["hud_md"], fill=T["acc3"], anchor="center")
+            return
+
+        # Not an OBD state
+        if self._connection_status == "not_obd":
+            cv.create_text(W // 2, cH // 2,
+                           text="❌ Not an OBD", font=self.F["hud_md"], fill=T["danger"], anchor="center")
             return
 
         # Failed state
