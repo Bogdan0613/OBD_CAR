@@ -17,10 +17,13 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-pip python3-dev python3-tk python3-serial bluetooth bluez-tools python3-full
 pip3 install --upgrade pip
 
-# 2. Install Python dependencies
-echo "Step 2: Installing Python libraries..."
+# 2. Create virtual environment and install Python dependencies
+echo "Step 2: Creating virtual environment and installing Python libraries..."
 cd "$(dirname "$0")"  # Go to script directory (project root)
-pip3 install obd
+python3 -m venv obd_env
+source obd_env/bin/activate
+pip install --upgrade pip
+pip install obd
 
 # 3. Configure Bluetooth/ELM327 (optional, requires user interaction)
 echo "Step 3: Bluetooth setup (manual steps required)"
@@ -49,7 +52,8 @@ sed -i 's|OBD_PORT = "/dev/ttyUSB0"|OBD_PORT = "/dev/rfcomm0"|' carbrain/carbrai
 
 # 6. Test installation
 echo "Step 6: Testing installation..."
-python3 -c "import obd; print('OBD library installed successfully')"
+source obd_env/bin/activate
+python -c "import obd; print('OBD library installed successfully')"
 
 # 7. Setup systemd service for autostart
 echo "Step 7: Setting up autostart service..."
@@ -62,7 +66,7 @@ After=network.target bluetooth.service
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/OBD_CAR
-ExecStart=/usr/bin/python3 /home/pi/OBD_CAR/carbrain/carbrain.py
+ExecStart=/home/pi/OBD_CAR/obd_env/bin/python /home/pi/OBD_CAR/carbrain/carbrain.py
 Restart=on-failure
 
 [Install]
@@ -73,7 +77,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable carbrain.service
 
 echo "=== Setup Complete ==="
-echo "To start manually: python3 carbrain/carbrain.py"
+echo "To start manually:"
+echo "  source obd_env/bin/activate"
+echo "  python3 carbrain/carbrain.py"
+echo ""
 echo "To start service: sudo systemctl start carbrain.service"
 echo "To check status: sudo systemctl status carbrain.service"
 echo "Reboot to test autostart: sudo reboot"
