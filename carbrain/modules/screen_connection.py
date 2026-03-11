@@ -180,7 +180,7 @@ class ConnectionScreen:
 
         # Header
         cv.create_rectangle(0, 0, W, 25, fill=T["border"], outline="")
-        cv.create_text(W // 2, 12, text="🔗 OBD",
+        cv.create_text(W // 2, 12, text="◆ OBD",
                        font=self.F["hud_md"], fill=T["acc3"], anchor="center")
 
         # Connected state

@@ -43,7 +43,7 @@ class TopBar:
                            font=self.F["ui_xs"], fill=T["acc2"],
                            anchor="center")
 
-        lbl = "☀ DAY" if theme_name == "night" else "🌙 NIGHT"
+        lbl = "○ DAY" if theme_name == "night" else "◐ NIGHT"
         rrect(cv, W - 80, 5, W - 5, 23, 3,
               fill=T["bg3"], outline=T["border_hi"], width=1, tags="thm")
         cv.create_text(W - 43, 14, text=lbl,
