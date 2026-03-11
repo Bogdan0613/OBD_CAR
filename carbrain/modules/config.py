@@ -6,8 +6,8 @@ NAV_H    = 38
 TOP_H    = 28
 
 # ── Timing ─────────────────────────────────────────────────────────────────
-POLL_MS  = 2000          # screen refresh interval (ms)
-LOG_S    = 60            # telemetry snapshot interval (seconds)
+POLL_MS  = 1000          # screen refresh interval (ms) - faster for real OBD
+LOG_S    = 30            # telemetry snapshot interval (seconds) - more frequent logging
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 DB_PATH  = os.path.join(os.path.dirname(__file__), "..", "carbrain.db")

@@ -119,83 +119,123 @@ class OBDSim:
 # ══════════════════════════════════════════════════════════════════════════════
 class OBDReal:
     """
-    Live ELM327 connector.  Requires:  pip install obd
+    Live ELM327 connector for Mazda 3 2008 1.6 BK.
+    Requires: pip install obd
+
+    Since Mazda 3 2008 doesn't provide odometer readings,
+    kilometers are calculated from speed over time.
 
     Usage:
-        from modules.obd_interface import OBDReal
-        obd_source = OBDReal(port="/dev/rfcomm0")   # or leave port=None for auto
+        obd = OBDReal(port="/dev/rfcomm0")  # Bluetooth serial port
     """
 
-    def __init__(self, port=None):
+    def __init__(self, port="/dev/rfcomm0"):
         try:
             import obd
-            self._obd = obd.OBD(port)
+            # Configure OBD connection with Mazda-specific settings
+            self._obd = obd.OBD(port, baudrate=38400, timeout=30)
+            print(f"OBD connection status: {self._obd.status()}")
         except ImportError:
-            raise RuntimeError(
-                "python-obd not installed.  Run: pip install obd"
-            )
+            raise RuntimeError("python-obd not installed. Run: pip install obd")
 
-        self._km    = 0.0
-        self._fuel  = 0.0
-        self._last  = time.time()
-        self._lock  = threading.Lock()
+        self._km = 0.0
+        self._fuel = 0.0
+        self._last = time.time()
+        self._lock = threading.Lock()
         self._cache = {}
         self._running = True
         threading.Thread(target=self._poll, daemon=True).start()
 
     def _q(self, cmd_name):
+        """Query OBD command with error handling."""
         import obd
-        cmd = getattr(obd.commands, cmd_name, None)
-        if cmd is None:
+        try:
+            cmd = getattr(obd.commands, cmd_name, None)
+            if cmd is None:
+                return None
+            r = self._obd.query(cmd)
+            if r.is_null():
+                return None
+            return r.value
+        except Exception as e:
+            print(f"OBD query error for {cmd_name}: {e}")
             return None
-        r = self._obd.query(cmd)
-        return r.value if not r.is_null() else None
 
     def _poll(self):
         import obd
         while self._running:
-            now  = time.time()
-            dt_h = (now - self._last) / 3600.0
+            now = time.time()
+            dt_s = (now - self._last)
+            dt_h = dt_s / 3600.0
             self._last = now
 
-            rpm     = self._q("RPM")
-            cool    = self._q("COOLANT_TEMP")
-            load    = self._q("ENGINE_LOAD")
-            thr     = self._q("THROTTLE_POS")
-            speed   = self._q("SPEED")
-            maf     = self._q("MAF")      # g/s
-            map_    = self._q("INTAKE_PRESSURE")
-            intake  = self._q("INTAKE_TEMP")
+            rpm = self._q("RPM")
+            cool = self._q("COOLANT_TEMP")
+            load = self._q("ENGINE_LOAD")
+            thr = self._q("THROTTLE_POS")
+            speed = self._q("SPEED")
+            maf = self._q("MAF")
+            map_ = self._q("INTAKE_PRESSURE")
+            intake = self._q("INTAKE_TEMP")
             voltage = self._q("CONTROL_MODULE_VOLTAGE")
 
-            # Fuel consumption from MAF (stoich 14.7:1, density 0.755 kg/L)
             inst = 0.0
-            if maf and speed and speed.magnitude > 2:
-                maf_gs = maf.magnitude          # g/s
-                fc_lh  = (maf_gs * 3600) / (14.7 * 755)   # L/h
-                spd_kmh= speed.magnitude
-                inst   = (fc_lh / spd_kmh) * 100           # L/100km
-            elif maf:
+            # if OBD provides a direct fuel economy value prefer it, otherwise calculate
+            obd_avg = None
+            for avg_cmd in ("FUEL_ECONOMY", "MPG", "FUEL_CONSUMPTION_RATE", "EFFICIENCY"):
+                try:
+                    v = self._q(avg_cmd)
+                except Exception:
+                    v = None
+                if v is not None:
+                    # some commands return L/100km, others mpg etc; we assume L/100km
+                    try:
+                        obd_avg = float(v.magnitude)
+                        break
+                    except Exception:
+                        pass
+
+            if maf:
                 maf_gs = maf.magnitude
-                inst   = (maf_gs * 3.6) / (14.7 * 0.755)  # rough L/h
+                if speed and speed.magnitude > 1:
+                    fc_lh = (maf_gs * 3600) / (14.7 * 755)
+                    spd_kmh = speed.magnitude
+                    inst = (fc_lh / spd_kmh) * 100
+                else:
+                    inst = (maf_gs * 3.6) / (14.7 * 0.755)
+            else:
+                if rpm and load:
+                    base_rate = (rpm.magnitude / 1000.0) * 0.5 * (load.magnitude / 100.0)
+                    if speed and speed.magnitude > 1:
+                        inst = (base_rate / speed.magnitude) * 100
+                    else:
+                        inst = base_rate
+
+            # if we got an obd average use it (override our computed value)
+            if obd_avg is not None:
+                inst = obd_avg
 
             spd_val = speed.magnitude if speed else 0
-            dk      = spd_val * dt_h
-            df      = dk * inst / 100.0
+            if hasattr(speed, "units") and str(speed.units) == "meter_per_second":
+                spd_val *= 3.6
+
+            dk = spd_val * dt_h
+            df = dk * inst / 100.0
 
             with self._lock:
-                self._km   += dk
+                self._km += dk
                 self._fuel += df
                 self._cache = {
-                    "rpm":     int(rpm.magnitude)    if rpm     else 0,
-                    "cool":    round(cool.magnitude, 1) if cool else 0.0,
-                    "load":    round(load.magnitude, 1) if load else 0.0,
-                    "throttle":round(thr.magnitude,  1) if thr  else 0.0,
-                    "speed":   round(spd_val, 1),
-                    "inst":    round(inst, 2),
-                    "map":     round(map_.magnitude,  1) if map_   else 0.0,
-                    "intake":  round(intake.magnitude,1) if intake else 0.0,
-                    "voltage": round(voltage.magnitude,2) if voltage else 0.0,
+                    "rpm": int(rpm.magnitude) if rpm else 0,
+                    "cool": round(cool.magnitude, 1) if cool else 0.0,
+                    "load": round(load.magnitude, 1) if load else 0.0,
+                    "throttle": round(thr.magnitude, 1) if thr else 0.0,
+                    "speed": round(spd_val, 1),
+                    "inst": round(max(inst, 0), 2),
+                    "avg_obd": round(obd_avg, 2) if obd_avg is not None else None,
+                    "map": round(map_.magnitude, 1) if map_ else 0.0,
+                    "intake": round(intake.magnitude, 1) if intake else 0.0,
+                    "voltage": round(voltage.magnitude, 2) if voltage else 0.0,
                 }
 
             time.sleep(POLL_MS / 1000.0)
@@ -203,25 +243,25 @@ class OBDReal:
     @property
     def data(self):
         with self._lock:
-            km   = self._km
+            km = self._km
             fuel = self._fuel
-            avg  = (fuel / km * 100) if km > 0.001 else self._cache.get("inst", 0)
+            # prefer average coming from OBD if present
+            avg = self._cache.get("avg_obd")
+            if avg is None:
+                avg = (fuel / km * 100) if km > 0.001 else self._cache.get("inst", 0)
             cool = self._cache.get("cool", 0)
-            state = (
-                "COLD" if cool < 60
-                else ("WARM" if cool < 90 else "HOT")
-            )
+            state = ("COLD" if cool < 60 else ("WARM" if cool < 90 else "HOT"))
             return {
                 **self._cache,
-                "avg":   round(avg, 2),
+                "avg": round(avg, 2) if avg is not None else None,
                 "state": state,
-                "km":    round(km, 3),
-                "fuel":  round(fuel, 3),
+                "km": round(km, 3),
+                "fuel": round(fuel, 3),
             }
 
     def reset(self):
         with self._lock:
-            self._km   = 0.0
+            self._km = 0.0
             self._fuel = 0.0
 
     def stop(self):
@@ -230,11 +270,20 @@ class OBDReal:
     def get_fault_codes(self):
         """Return list of (code, description) tuples."""
         import obd
-        r = self._obd.query(obd.commands.GET_DTC)
-        if r.is_null():
+        try:
+            r = self._obd.query(obd.commands.GET_DTC)
+            if r.is_null():
+                return []
+            return [(str(c[0]), str(c[1])) for c in r.value]
+        except Exception as e:
+            print(f"Error reading fault codes: {e}")
             return []
-        return [(str(c[0]), str(c[1])) for c in r.value]
 
     def clear_fault_codes(self):
+        """Clear diagnostic trouble codes."""
         import obd
-        self._obd.query(obd.commands.CLEAR_DTC)
+        try:
+            self._obd.query(obd.commands.CLEAR_DTC)
+            print("Fault codes cleared")
+        except Exception as e:
+            print(f"Error clearing fault codes: {e}")

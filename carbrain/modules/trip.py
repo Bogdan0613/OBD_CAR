@@ -58,7 +58,7 @@ class TripController:
         now  = datetime.now().isoformat()
 
         saved = None
-        if km > 0.01:
+        if km > 0.001:  # Lower minimum distance for real trips
             t_data = {
                 "date":     date.today().isoformat(),
                 "start_ts": self._start_ts,
@@ -94,7 +94,7 @@ class TripController:
         self._last_log = now
 
         d = self._obd.data
-        if d["km"] < 0.05:
+        if d["km"] < 0.01:  # Lower threshold for real OBD accuracy
             return   # not moving yet
 
         # Ensure DB row exists

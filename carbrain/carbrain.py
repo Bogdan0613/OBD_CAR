@@ -15,8 +15,8 @@ For real OBD (ELM327 Bluetooth):
 import tkinter as tk
 
 # ── Select OBD source here ─────────────────────────────────────────────────
-USE_REAL_OBD = False
-OBD_PORT     = None          # e.g. "/dev/rfcomm0"  – None = auto-detect
+USE_REAL_OBD = True
+OBD_PORT     = "/dev/rfcomm0"          # Bluetooth serial port for ELM327
 
 # ── Imports ────────────────────────────────────────────────────────────────
 from modules.config  import W, H, NAV_H, TOP_H, THEMES, POLL_MS
