@@ -22,6 +22,14 @@ class ConnectionScreen:
         self._connection_status = None  # "connecting", "connected", "failed"
         self._auto_connect_attempted = False
 
+        # Button regions for click detection
+        self._scan_btn_rect = None
+        self._bypass_btn_rect = None
+        self._device_rects = {}  # device_idx -> (x1, y1, x2, y2)
+
+        # Bind canvas click events
+        self.cv.bind("<Button-1>", self._on_canvas_click)
+
     def update_theme(self, T, F):
         self.T = T
         self.F = F
@@ -59,7 +67,7 @@ class ConnectionScreen:
 
         threading.Thread(target=scan, daemon=True).start()
 
-    def _connect_device(self, mac):
+    def _connect_device(self, mac, name=None):
         """Connect to selected device"""
         self._connecting = True
         self._connection_status = "connecting"
@@ -72,113 +80,102 @@ class ConnectionScreen:
         self._connecting = False
         self.draw()
 
+    def _on_canvas_click(self, event):
+        """Handle canvas clicks by checking coordinates."""
+        x, y = event.x, event.y
+
+        # Check scan button
+        if self._scan_btn_rect:
+            x1, y1, x2, y2 = self._scan_btn_rect
+            if x1 <= x <= x2 and y1 <= y <= y2 and not self._scanning:
+                self._scan_devices()
+                return
+
+        # Check device buttons
+        for device_idx, (x1, y1, x2, y2) in self._device_rects.items():
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                mac, name = self._devices[device_idx]
+                self._connect_device(mac, name)
+                return
+
+        # Check bypass button
+        if self._bypass_btn_rect:
+            x1, y1, x2, y2 = self._bypass_btn_rect
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                self._on_bypass()
+                return
+
     def draw(self):
         cv = self.cv
         cv.delete("all")
         T = self.T
         cH = H - TOP_H - NAV_H
 
+        # Reset button regions
+        self._scan_btn_rect = None
+        self._bypass_btn_rect = None
+        self._device_rects = {}
+
         # Header
-        cv.create_rectangle(0, 0, W, 30, fill=T["border"], outline="")
-        cv.create_text(W // 2, 15,
-                       text="🔗 OBD CONNECTION",
+        cv.create_rectangle(0, 0, W, 25, fill=T["border"], outline="")
+        cv.create_text(W // 2, 12, text="🔗 OBD",
                        font=self.F["hud_md"], fill=T["acc3"], anchor="center")
 
-        # If successfully connected, show checkmark
+        # Connected state
         if self._connection_status == "connected":
             cv.create_text(W // 2, cH // 2 - 20,
-                           text="✓", font=self.F["hud_xl"], fill=T["acc2"], anchor="center")
-            cv.create_text(W // 2, cH // 2 + 20,
-                           text="OBD Connected",
-                           font=self.F["hud_md"], fill=T["acc2"], anchor="center")
+                           text="✓ Connected", font=self.F["hud_lg"], fill=T["acc2"], anchor="center")
+            cv.create_text(W // 2, cH // 2 + 10,
+                           text="Loading...", font=self.F["ui_md"], fill=T["text3"], anchor="center")
             return
 
-        # If connecting, show spinner
+        # Connecting state
         if self._connection_status == "connecting":
-            cv.create_text(W // 2, cH // 2 - 15,
-                           text="⏳ Connecting...",
-                           font=self.F["hud_md"], fill=T["acc3"], anchor="center")
-            cv.create_text(W // 2, cH // 2 + 15,
-                           text="Please wait",
-                           font=self.F["ui_md"], fill=T["text3"], anchor="center")
+            cv.create_text(W // 2, cH // 2,
+                           text="⏳ Connecting...", font=self.F["hud_md"], fill=T["acc3"], anchor="center")
             return
 
-        # If failed, show retry option
+        # Failed state
         if self._connection_status == "failed":
-            cv.create_text(W // 2, cH // 2 - 20,
-                           text="❌ Connection Failed",
-                           font=self.F["hud_md"], fill=T["danger"], anchor="center")
-            cv.create_text(W // 2, cH // 2 + 15,
-                           text="Try again or scan for devices",
-                           font=self.F["ui_sm"], fill=T["text3"], anchor="center")
-
-        # Main content area
-        content_top = 35
-        content_height = cH - content_top - 55  # Leave room for bypass button
+            cv.create_text(W // 2, cH // 2 - 15,
+                           text="❌ Failed", font=self.F["hud_md"], fill=T["danger"], anchor="center")
+            cv.create_text(W // 2, cH // 2 + 5,
+                           text="Tap SCAN", font=self.F["ui_md"], fill=T["text3"], anchor="center")
 
         # Scan button
-        btn_h = 35
-        cv.create_rectangle(10, content_top, W - 10, content_top + btn_h,
-                           fill=T["acc_dim"], outline=T["acc"], width=2, tags="scan_btn")
-        scan_text = "🔍 Scanning..." if self._scanning else "🔍 Scan Bluetooth Devices"
-        cv.create_text(W // 2, content_top + btn_h // 2, text=scan_text,
-                       font=self.F["ui_md"], fill=T["acc"], anchor="center", tags="scan_btn")
-        if not self._scanning:
-            cv.tag_bind("scan_btn", "<Button-1>", lambda e: self._scan_devices())
+        y = 30
+        scan_color = T["acc2_dim"] if self._scanning else T["acc_dim"]
+        cv.create_rectangle(8, y, W - 8, y + 35,
+                           fill=scan_color, outline=T["acc"], width=2)
+        scan_text = "SCANNING" if self._scanning else "SCAN"
+        cv.create_text(W // 2, y + 17, text=scan_text,
+                       font=self.F["hud_md"], fill=T["acc"], anchor="center")
+        self._scan_btn_rect = (8, y, W - 8, y + 35)
 
-        # Device list area
-        list_top = content_top + btn_h + 10
-        list_height = content_height - btn_h - 10
+        # Device list
+        y += 40
+        device_idx = 0
+        for mac, name in self._devices[:5]:  # Max 5 devices
+            cv.create_rectangle(8, y, W - 8, y + 32,
+                               fill=T["bg3"], outline=T["acc2"], width=1)
+            cv.create_text(12, y + 7, text=name, font=self.F["hud_sm"], fill=T["text"],
+                           anchor="nw")
+            cv.create_text(12, y + 20, text=mac, font=self.F["ui_xs"], fill=T["text2"],
+                           anchor="nw")
+            self._device_rects[device_idx] = (8, y, W - 8, y + 32)
+            y += 33
+            device_idx += 1
 
-        if self._devices:
-            # Title
-            cv.create_text(15, list_top, text="Available Devices:",
-                           font=self.F["ui_md"], fill=T["text"], anchor="nw")
-
-            # Device items
-            y_pos = list_top + 25
-            max_devices = 3
-            for i, (mac, name) in enumerate(self._devices[:max_devices]):
-                if y_pos + 40 > list_top + list_height:
-                    break
-
-                # Device button
-                dev_height = 40
-                cv.create_rectangle(10, y_pos, W - 10, y_pos + dev_height,
-                                   fill=T["bg3"], outline=T["acc2"], width=2, tags=f"dev_{i}")
-
-                # Device name and MAC
-                cv.create_text(20, y_pos + 10, text=name,
-                               font=self.F["ui_md"], fill=T["text"], anchor="nw", tags=f"dev_{i}")
-                cv.create_text(20, y_pos + 25, text=mac,
-                               font=self.F["ui_xs"], fill=T["text2"], anchor="nw", tags=f"dev_{i}")
-
-                cv.tag_bind(f"dev_{i}", "<Button-1>", lambda e, m=mac: self._connect_device(m))
-                y_pos += dev_height + 5
-
-            # Show more indicator
-            if len(self._devices) > max_devices:
-                cv.create_text(W // 2, y_pos + 5,
-                              text=f"... and {len(self._devices) - max_devices} more",
-                              font=self.F["ui_xs"], fill=T["text3"], anchor="center")
-        else:
-            # No devices message
-            if self._scanning:
-                cv.create_text(W // 2, list_top + 30,
-                              text="Scanning for devices...",
-                              font=self.F["ui_md"], fill=T["text3"], anchor="center")
-            else:
-                cv.create_text(W // 2, list_top + 20,
-                              text="No devices found",
-                              font=self.F["ui_md"], fill=T["text3"], anchor="center")
-                cv.create_text(W // 2, list_top + 45,
-                              text="Tap 'Scan' to search for Bluetooth devices",
-                              font=self.F["ui_xs"], fill=T["text3"], anchor="center")
+        # Show how many more if needed
+        if len(self._devices) > 5:
+            cv.create_text(W // 2, y, text=f"+{len(self._devices) - 5} more",
+                           font=self.F["ui_xs"], fill=T["text2"], anchor="center")
+            y += 20
 
         # Bypass button at bottom
-        bypass_y = cH - 48
-        cv.create_rectangle(10, bypass_y, W - 10, bypass_y + 40,
-                           fill=T["danger_dim"], outline=T["danger"], width=2, tags="bypass_btn")
-        cv.create_text(W // 2, bypass_y + 20, text="⚠ Bypass (Testing - No Recording)",
-                       font=self.F["ui_md"], fill=T["danger"], anchor="center", tags="bypass_btn")
-        cv.tag_bind("bypass_btn", "<Button-1>", lambda e: self._on_bypass())
+        bypass_y = cH - 32
+        cv.create_rectangle(8, bypass_y, W - 8, cH - 2,
+                           fill=T["danger_dim"], outline=T["danger"], width=2)
+        cv.create_text(W // 2, bypass_y + 15, text="BYPASS",
+                       font=self.F["hud_md"], fill=T["danger"], anchor="center")
+        self._bypass_btn_rect = (8, bypass_y, W - 8, cH - 2)
