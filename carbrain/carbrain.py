@@ -96,11 +96,36 @@ class CarBrain(tk.Tk):
 
         print(f"[INFO] Attempting to connect to OBD device: {mac}")
 
+        # Create rfcomm binding (Linux/Raspberry Pi)
+        import subprocess
+        import platform
+        port = "/dev/rfcomm0"
+
+        if platform.system() == "Linux":
+            try:
+                # Unbind first if already bound
+                subprocess.run(["rfcomm", "release", "0"], capture_output=True, timeout=5)
+                # Create new binding
+                result = subprocess.run(["rfcomm", "bind", "0", mac], capture_output=True, text=True, timeout=10)
+                if result.returncode != 0:
+                    print(f"[WARN] rfcomm bind failed: {result.stderr}")
+                    self._conn_screen.set_connection_status("failed")
+                    return
+                print(f"[INFO] rfcomm bound to {mac}")
+            except FileNotFoundError:
+                print("[WARN] rfcomm command not found. Run: sudo apt-get install bluez")
+                self._conn_screen.set_connection_status("failed")
+                return
+            except Exception as e:
+                print(f"[WARN] rfcomm bind error: {e}")
+                self._conn_screen.set_connection_status("failed")
+                return
+
         from modules.obd_interface import OBDReal
         self.obd = OBDReal()
 
         # Try to connect
-        if self.obd.connect(port="/dev/rfcomm0"):
+        if self.obd.connect(port=port):
             # Connection successful
             self.db.put("last_obd_device", mac)
             print("[INFO] OBD connection established")
