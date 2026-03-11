@@ -77,64 +77,78 @@ class CarBrain(tk.Tk):
         self._conn_screen.draw()
 
         # Schedule auto-connect attempt
+        print("[DEBUG] Scheduling auto-connect in 500ms...")
         self.after(500, self._conn_screen.start_auto_connect)
 
+        print("[DEBUG] Starting main event loop...")
         self._tick()
 
     def _on_connect_selected(self, mac: str = None):
         """User selected to connect to a device or auto-connect."""
-        if mac is None:
-            # Try to auto-connect to last device
-            last_mac = self.db.get("last_obd_device")
-            if last_mac:
-                mac = last_mac
-            else:
-                # No last device, show message and return
-                print("[INFO] No previously connected device found. User must select device.")
-                self._conn_screen.set_connection_status("failed")
-                return
-
-        print(f"[INFO] Attempting to connect to OBD device: {mac}")
-
-        # Create rfcomm binding (Linux/Raspberry Pi)
-        import subprocess
-        import platform
-        port = "/dev/rfcomm0"
-
-        if platform.system() == "Linux":
-            try:
-                # Unbind first if already bound
-                subprocess.run(["rfcomm", "release", "0"], capture_output=True, timeout=5)
-                # Create new binding
-                result = subprocess.run(["rfcomm", "bind", "0", mac], capture_output=True, text=True, timeout=10)
-                if result.returncode != 0:
-                    print(f"[WARN] rfcomm bind failed: {result.stderr}")
+        try:
+            if mac is None:
+                # Try to auto-connect to last device
+                last_mac = self.db.get("last_obd_device")
+                if last_mac:
+                    mac = last_mac
+                else:
+                    # No last device, show message and return
+                    print("[INFO] No previously connected device found. User must select device.")
                     self._conn_screen.set_connection_status("failed")
                     return
-                print(f"[INFO] rfcomm bound to {mac}")
-            except FileNotFoundError:
-                print("[WARN] rfcomm command not found. Run: sudo apt-get install bluez")
-                self._conn_screen.set_connection_status("failed")
-                return
-            except Exception as e:
-                print(f"[WARN] rfcomm bind error: {e}")
-                self._conn_screen.set_connection_status("failed")
-                return
 
-        from modules.obd_interface import OBDReal
-        self.obd = OBDReal()
+            print(f"[INFO] Attempting to connect to OBD device: {mac}")
 
-        # Try to connect
-        if self.obd.connect(port=port):
-            # Connection successful
-            self.db.put("last_obd_device", mac)
-            print("[INFO] OBD connection established")
-            self._conn_screen.set_connection_status("connected")
-            # Small delay to show connected state before transitioning
-            self.after(800, self._initialize_main_app)
-        else:
-            print("[WARN] OBD connection failed")
-            self.obd = None
+            # Create rfcomm binding (Linux/Raspberry Pi)
+            import subprocess
+            import platform
+            port = "/dev/rfcomm0"
+
+            if platform.system() == "Linux":
+                try:
+                    print(f"[DEBUG] Releasing rfcomm0...")
+                    # Unbind first if already bound
+                    subprocess.run(["rfcomm", "release", "0"], capture_output=True, timeout=5)
+                    print(f"[DEBUG] Binding rfcomm0 to {mac}...")
+                    # Create new binding
+                    result = subprocess.run(["rfcomm", "bind", "0", mac], capture_output=True, text=True, timeout=10)
+                    if result.returncode != 0:
+                        print(f"[WARN] rfcomm bind failed: {result.stderr}")
+                        self._conn_screen.set_connection_status("failed")
+                        return
+                    print(f"[INFO] rfcomm bound to {mac}")
+                except FileNotFoundError:
+                    print("[WARN] rfcomm command not found. Run: sudo apt-get install bluez")
+                    self._conn_screen.set_connection_status("failed")
+                    return
+                except subprocess.TimeoutExpired:
+                    print("[WARN] rfcomm command timed out")
+                    self._conn_screen.set_connection_status("failed")
+                    return
+                except Exception as e:
+                    print(f"[WARN] rfcomm bind error: {e}")
+                    self._conn_screen.set_connection_status("failed")
+                    return
+
+            from modules.obd_interface import OBDReal
+            self.obd = OBDReal()
+
+            # Try to connect
+            if self.obd.connect(port=port):
+                # Connection successful
+                self.db.put("last_obd_device", mac)
+                print("[INFO] OBD connection established")
+                self._conn_screen.set_connection_status("connected")
+                # Small delay to show connected state before transitioning
+                self.after(800, self._initialize_main_app)
+            else:
+                print("[WARN] OBD connection failed")
+                self.obd = None
+                self._conn_screen.set_connection_status("failed")
+        except Exception as e:
+            print(f"[ERROR] _on_connect_selected failed: {e}")
+            import traceback
+            traceback.print_exc()
             self._conn_screen.set_connection_status("failed")
 
     def _on_bypass_selected(self):
@@ -444,6 +458,8 @@ class CarBrain(tk.Tk):
 
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
+    print("[APP] Initializing CarBrain...")
     app = CarBrain()
+    print("[APP] GUI created, running mainloop...")
     app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()
