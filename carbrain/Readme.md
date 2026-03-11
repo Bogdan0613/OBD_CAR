@@ -119,3 +119,5 @@ SQLite at `~/carbrain.db`.
 | `telemetry`    | Compact JSON snapshots every 60 s during active trips |
 | `month_archive`| Aggregated summary per past calendar month |
 | `cfg`          | Key/value settings (theme, fuel_price) |
+
+k
