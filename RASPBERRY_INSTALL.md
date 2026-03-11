@@ -15,7 +15,8 @@ application and how to launch the app automatically when the board powers on.
 2. **Update system packages**
    ```bash
    sudo apt update && sudo apt upgrade -y
-   sudo apt install -y python3-pip python3-tk python3-dev bluetooth bluez-tools
+   sudo apt install -y python3-pip python3-dev python3-tk python3-serial bluetooth bluez-tools
+   pip3 install --upgrade pip
    ```
 
 3. **Clone project & install Python libs**
@@ -104,6 +105,7 @@ EOF
 ---
 
 ### Notes
+- **python-obd installation issues**: If `pip3 install obd` fails with "python3-full" messages, install the full Python package: `sudo apt install -y python3-full`. Then retry `pip3 install obd`. Alternatively, use a virtual environment as shown above.
 - Logs from the service appear in `journalctl -u carbrain.service`.
 - To update the application, pull the latest code and restart the service:
   `sudo systemctl restart carbrain.service`.
