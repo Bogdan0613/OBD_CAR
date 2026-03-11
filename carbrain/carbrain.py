@@ -173,8 +173,11 @@ class CarBrain(tk.Tk):
                         (c, d, "error") for c, d in self.obd.get_fault_codes()
                     ]
                     self._errors.set_codes(codes, simulated=False)
-                except Exception:
-                    pass
+                except Exception as ex:
+                    print(f"[WARN] Could not read fault codes: {ex}")
+                    self._errors.set_codes([], simulated=False)
+            else:
+                self._errors.set_codes([], simulated=True)
             self._errors.draw()
 
     # ── Theme ──────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import tkinter as tk
 
-from modules.config import W, H, NAV_H, TOP_H, MOCK_ERRORS
+from modules.config import W, H, NAV_H, TOP_H
 from modules.draw import rrect, shadowed
 
 
@@ -32,7 +32,7 @@ class ErrorsScreen:
         T  = self.T
         cH = H - TOP_H - NAV_H
 
-        codes = self._codes or MOCK_ERRORS
+        codes = self._codes
 
         # ── Header ──────────────────────────────────────────────────────
         rrect(cv, 4, 4, W - 4, 24, 3,
