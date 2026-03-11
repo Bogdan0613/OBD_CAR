@@ -364,22 +364,37 @@ class OBDReal:
         """Scan using hcitool (Linux/Raspberry Pi)."""
         devices = []
         try:
-            result = subprocess.run(["hcitool", "scan"], capture_output=True, text=True, timeout=10)
+            print("[BLUETOOTH] Running hcitool scan...")
+            # Try with sudo if available
+            try:
+                result = subprocess.run(["sudo", "hcitool", "scan"], capture_output=True, text=True, timeout=15)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                print("[BLUETOOTH] Sudo hcitool failed, trying without sudo...")
+                result = subprocess.run(["hcitool", "scan"], capture_output=True, text=True, timeout=15)
+
             if result.returncode == 0:
+                print(f"[BLUETOOTH] hcitool output:\n{result.stdout}")
                 lines = result.stdout.strip().split('\n')[1:]  # Skip header
                 for line in lines:
+                    if not line.strip():
+                        continue
                     parts = line.strip().split('\t')
                     if len(parts) >= 2:
                         mac = parts[0].strip()
                         name = parts[1].strip() if len(parts) > 1 else "Unknown"
                         if mac and name:
                             devices.append((mac, name))
+                            print(f"[BLUETOOTH] Found: {mac} {name}")
+            else:
+                print(f"[BLUETOOTH] hcitool returned {result.returncode}: {result.stderr}")
         except FileNotFoundError:
             print("[WARN] hcitool not found. Run: sudo apt-get install bluez")
         except subprocess.TimeoutExpired:
-            print("[WARN] hcitool scan timeout")
+            print("[WARN] hcitool scan timeout (>15s)")
         except Exception as e:
             print(f"[WARN] Linux scan error: {e}")
+            import traceback
+            traceback.print_exc()
         return devices
 
     @staticmethod

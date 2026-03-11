@@ -22,6 +22,7 @@ class ConnectionScreen:
         self._connection_status = None  # "connecting", "connected", "failed"
         self._auto_connect_attempted = False
         self._device_scroll = 0  # Scroll offset for device list
+        self._scan_start_time = None  # Track when scan started
 
         # Button regions for click detection
         self._scan_btn_rect = None
@@ -55,19 +56,24 @@ class ConnectionScreen:
         self._scanning = True
         self._devices = []
         self._device_scroll = 0
+        self._scan_start_time = time.time()
         self.draw()  # Show scanning state immediately
+        self._animate_scan()  # Start animation loop
 
         def scan():
             try:
                 # Use OBDReal's static method for device discovery
                 from modules.obd_interface import OBDReal
+                print("[CONNECTION] Starting Bluetooth scan...")
                 discovered = OBDReal.discover_devices()
+                print(f"[CONNECTION] Scan complete. Found {len(discovered)} devices")
                 # Prepend new devices (newest at top)
                 self._devices = discovered + self._devices
             except Exception as ex:
                 print(f"[WARN] Bluetooth scan failed: {ex}")
             finally:
                 self._scanning = False
+                self._scan_start_time = None
                 # Use after() to safely update UI from main thread
                 self.cv.after(0, self.draw)
 
@@ -94,9 +100,16 @@ class ConnectionScreen:
         if self._scan_btn_rect:
             x1, y1, x2, y2 = self._scan_btn_rect
             if x1 <= x <= x2 and y1 <= y <= y2:
-                if not self._scanning:
+                if self._scanning:
+                    # Cancel scan
+                    print("[CONNECTION] Scan cancelled by user")
+                    self._scanning = False
+                    self._scan_start_time = None
+                    self.draw()
+                else:
+                    # Start scan
                     self._scan_devices()
-                    return
+                return
 
         # Check device buttons
         for device_idx, (x1, y1, x2, y2) in self._device_rects.items():
@@ -134,6 +147,12 @@ class ConnectionScreen:
         if self._device_scroll < len(self._devices) - 5:
             self._device_scroll += 1
             self.draw()
+
+    def _animate_scan(self):
+        """Animate scanning dots every 300ms."""
+        if self._scanning:
+            self.draw()
+            self.cv.after(300, self._animate_scan)
 
     def draw(self):
         cv = self.cv
@@ -173,12 +192,12 @@ class ConnectionScreen:
             cv.create_text(W // 2, cH // 2 + 5,
                            text="Tap SCAN", font=self.F["ui_md"], fill=T["text3"], anchor="center")
 
-        # Scan button
+        # Scan button - shows SCAN or CANCEL
         y = 30
         scan_color = T["acc2_dim"] if self._scanning else T["acc_dim"]
         cv.create_rectangle(8, y, W - 8, y + 35,
                            fill=scan_color, outline=T["acc"], width=2)
-        scan_text = "SCANNING..." if self._scanning else "SCAN"
+        scan_text = "CANCEL" if self._scanning else "SCAN"
         cv.create_text(W // 2, y + 17, text=scan_text,
                        font=self.F["hud_md"], fill=T["acc"], anchor="center")
         self._scan_btn_rect = (8, y, W - 8, y + 35)
@@ -220,12 +239,28 @@ class ConnectionScreen:
                            text="Tap SCAN to search",
                            font=self.F["ui_md"], fill=T["text2"], anchor="center")
 
-        # Show scanning text if scanning and no devices yet
-        if self._scanning and not self._devices:
-            hint_y = (list_start + list_end) // 2
+        # Show scanning with animated dots
+        if self._scanning:
+            hint_y = (list_start + list_end) // 2 - 20
+
+            # Animated dots based on time
+            if self._scan_start_time:
+                elapsed = time.time() - self._scan_start_time
+                dot_count = int(elapsed) % 4
+                dots = "." * (dot_count + 1)
+            else:
+                dots = "..."
+
             cv.create_text(W // 2, hint_y,
-                           text="Scanning...",
-                           font=self.F["ui_md"], fill=T["acc2"], anchor="center")
+                           text=f"Scanning{dots}",
+                           font=self.F["hud_md"], fill=T["acc2"], anchor="center")
+
+            # Show time elapsed
+            if self._scan_start_time:
+                elapsed = int(time.time() - self._scan_start_time)
+                cv.create_text(W // 2, hint_y + 25,
+                               text=f"{elapsed}s (max 20s)",
+                               font=self.F["ui_xs"], fill=T["text2"], anchor="center")
 
         # Show device count if scanning
         if self._scanning and self._devices:
